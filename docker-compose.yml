@@ -1,3 +1,7 @@
+# Имя проекта закреплено явно: иначе compose берёт его из имени папки,
+# и при переименовании/переносе теряются volume с данными.
+name: saas_control
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -12,10 +16,156 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-saas_control}']
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-saas_control}',
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Профиль app: приложения в контейнерах. Без профиля поднимается только БД —
+  # обычный режим разработки, когда бэк и фронт запущены локально.
+  backend:
+    profiles: ['app']
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    image: saas_control/backend
+    container_name: saas_control_backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-saas_control}?schema=public
+      # без секрета бэкенд не стартует в production — задаётся в .env
+      JWT_SECRET: ${JWT_SECRET:-}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      # стек в compose открыт по http, поэтому secure-куку выключаем явно:
+      # иначе браузер её не сохранит и вход не сработает. За https — true.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # из APP_URL собирается ссылка подтверждения почты
+      APP_URL: ${APP_URL:-http://localhost:${FRONTEND_PORT:-3001}}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-no-reply@saas-control.local}
+      # saas_bridge: пусто — сайты только пишутся в базу, bench не вызывается
+      BRIDGE_URL: ${BRIDGE_URL:-}
+      BRIDGE_API_KEY: ${BRIDGE_API_KEY:-}
+      BRIDGE_API_SECRET: ${BRIDGE_API_SECRET:-}
+    ports:
+      - '${BACKEND_PORT:-3000}:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    profiles: ['app']
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    image: saas_control/frontend
+    container_name: saas_control_frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      HOSTNAME: 0.0.0.0
+      # внутри сети compose бэкенд доступен по имени сервиса
+      BACKEND_URL: http://backend:3000
+    ports:
+      - '${FRONTEND_PORT:-3001}:3001'
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # Профиль dev: те же два приложения, но в watch-режиме и с бинд-маунтом
+  # исходников — правка файла на хосте перезапускает процесс внутри контейнера.
+  # В образе лежат только node_modules, код приезжает томом.
+  backend-dev:
+    profiles: ['dev']
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+      target: dev
+    image: saas_control/backend-dev
+    container_name: saas_control_backend_dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      # переменные окружения перекрывают apps/backend/.env, который приезжает
+      # бинд-маунтом и указывает на localhost:5433 — внутри сети это не тот адрес
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-saas_control}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      APP_URL: ${APP_URL:-http://localhost:${FRONTEND_PORT:-3001}}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-no-reply@saas-control.local}
+      # saas_bridge: пусто — сайты только пишутся в базу, bench не вызывается
+      BRIDGE_URL: ${BRIDGE_URL:-}
+      BRIDGE_API_KEY: ${BRIDGE_API_KEY:-}
+      BRIDGE_API_SECRET: ${BRIDGE_API_SECRET:-}
+    ports:
+      - '${BACKEND_PORT:-3000}:3000'
+    volumes:
+      - ./apps/backend:/repo/apps/backend
+      # анонимный том прячет node_modules хоста: внутри нужны те, что поставил
+      # npm ci в образе, иначе бинарники и платформозависимые пакеты разъедутся
+      - /repo/apps/backend/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend-dev:
+    profiles: ['dev']
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+      target: dev
+    image: saas_control/frontend-dev
+    container_name: saas_control_frontend_dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: '1'
+      PORT: 3001
+      # перекрывает BACKEND_URL из apps/frontend/.env.local: внутри сети
+      # бэкенд доступен по имени сервиса, а не по localhost
+      BACKEND_URL: http://backend-dev:3000
+      NEXT_PUBLIC_API_BASE_URL: /api
+    ports:
+      - '${FRONTEND_PORT:-3001}:3001'
+    volumes:
+      - ./apps/frontend:/repo/apps/frontend
+      - /repo/apps/frontend/node_modules
+      # свой .next: в кэше турбопака абсолютные пути, а внутри проект по /repo
+      - /repo/apps/frontend/.next
+    depends_on:
+      - backend-dev
+
+  # Одноразовый прогон миграций: docker compose run --rm migrate
+  migrate:
+    profiles: ['tools']
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+      target: build
+    image: saas_control/backend-tools
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-saas_control}?schema=public
+    working_dir: /repo/apps/backend
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:

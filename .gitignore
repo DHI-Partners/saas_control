@@ -1,56 +1,36 @@
-# compiled output
-/dist
-/node_modules
-/build
+# dependencies
+node_modules
 
-# Logs
+# build output
+dist
+build
+.next
+out
+
+# logs
 logs
 *.log
 npm-debug.log*
-pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-lerna-debug.log*
 
-# OS
+# coverage
+coverage
+.nyc_output
+
+# env
+.env
+.env.local
+!.env.example
+
+# OS / editors
 .DS_Store
-
-# Tests
-/coverage
-/.nyc_output
-
-# IDEs and editors
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-
-# IDE - VSCode
+.idea
 .vscode/*
 !.vscode/settings.json
-!.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
 
-# temp directory
+# temp
 .temp
 .tmp
-
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Diagnostic reports
-report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
-
-# Environment variables
-.env
-!.env.example
-
-# Prisma generated client
-/src/generated/prisma

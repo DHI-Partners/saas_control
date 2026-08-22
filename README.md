@@ -1,141 +1,164 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# SaaS Control
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Монорепозиторий на npm workspaces.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
-
-```bash
-$ npm install
+```
+.
+├── apps/
+│   ├── backend/     # NestJS 11 + Prisma 7 + Postgres   :3000
+│   └── frontend/    # Next.js 16 (App Router)           :3001
+├── docker-compose.yml
+└── package.json     # корень workspace
 ```
 
-## Compile and run the project
+Фронт ходит в бэкенд по относительному `/api/*` — его проксирует route handler
+[apps/frontend/src/app/api/[...path]/route.ts](apps/frontend/src/app/api/%5B...path%5D/route.ts),
+читающий `BACKEND_URL` на каждый запрос. Поэтому нет CORS, адрес бэкенда не
+попадает в бандл, и один и тот же образ работает в любом окружении.
 
-```bash
-# development
-$ npm run start
+## Что внутри
 
-# watch mode
-$ npm run start:dev
+Личный кабинет клиента: регистрация по почте, вход по сессионной куке и база
+сайтов Frappe. У клиента может быть сколько угодно сайтов, каждый сайт
+принадлежит ровно одному клиенту.
 
-# production mode
-$ npm run start:prod
+```
+Client (аккаунт кабинета)  1 ──< N  Site (сайт Frappe: имя в bench, домен,
+                                          статус, тариф, версия, приложения)
 ```
 
-## Run tests
+Подробности: [модель и ручки](apps/backend/README.md#модель-данных) ·
+[страницы кабинета](apps/frontend/README.md#личный-кабинет).
+
+## Переменные окружения
+
+`.env` в монорепо **один — корневой**, пер-приложенческих нет. Его читают:
+
+| Кто | Как |
+| --- | --- |
+| docker compose | сам, для подстановки `${VAR}` в [docker-compose.yml](docker-compose.yml) |
+| бэкенд при запуске с хоста | `ConfigModule.forRoot({ envFilePath: '../../.env' })` — [app.module.ts](apps/backend/src/app.module.ts) |
+| Prisma CLI | `dotenv` с тем же путём — [prisma.config.ts](apps/backend/prisma.config.ts) |
+| фронтенд | ничего не читает: `BACKEND_URL` и база API имеют значения по умолчанию в коде |
+
+Внутри контейнеров файла нет — там всё приходит из `environment:` службы, и
+переменная окружения всегда сильнее файла: `@nestjs/config` не перезаписывает
+уже заданные ключи. Поэтому одни и те же `JWT_SECRET`, `BRIDGE_*` и прочее
+задаются ровно в одном месте, а compose подменяет только адреса, которые внутри
+сети выглядят иначе (`DATABASE_URL`, `BACKEND_URL`).
+
+Добавляешь новую переменную — впиши её в [.env.example](.env.example) и, если она
+нужна в докере, в `environment:` соответствующей службы compose.
+
+## Режим 1: разработка (в докере только БД)
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm install
+cp .env.example .env                                    # единственный .env на монорепо
+npm run db:up                                           # Postgres на localhost:5433
+npm run backend -- prisma:migrate
+npm run dev                                             # бэк :3000 + фронт :3001
 ```
 
-## Deployment
+Открыть http://localhost:3001 — регистрация, вход и кабинет со списком сайтов;
+там же карточка статуса: серверная проверка (Next → Nest) и кнопка проверки из
+браузера (через `/api`).
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Письма без `SMTP_URL` никуда не уходят — ссылку подтверждения почты видно в
+логе бэкенда.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Сайты без `BRIDGE_URL`/`BRIDGE_API_KEY`/`BRIDGE_API_SECRET` только пишутся в базу
+кабинета: `bench new-site` не вызывается. Задать их — и создание сайта уходит в
+[saas_bridge](https://github.com/DHI-Partners/saas_bridge) на управляющем сайте
+бенча (`create_site`), а карточка сайта опрашивает `get_site_status`, пока прогон
+не закончится.
+
+## Режим 2: разработка целиком в докере
+
+То же самое, что режим 1, но бэк и фронт тоже в контейнерах — на хосте нужен
+только докер. Исходники не копируются в образ, а приезжают бинд-маунтом, внутри
+работают те же `nest start --watch` и `next dev`: правка файла на хосте
+перезапускает процесс в контейнере, руками пересобирать образ не нужно.
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+cp .env.example .env         # единственный .env на монорепо
+npm run docker:dev:up        # postgres + backend-dev + frontend-dev, со сборкой
+npm run docker:dev:migrate   # prisma migrate deploy внутри сети compose
+npm run docker:dev:logs
+npm run docker:dev:down
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+Адреса те же: фронт на http://localhost:3001, бэк на :3000. Клиент Prisma
+генерируется при старте контейнера, поэтому `src/generated` на хосте иметь
+не обязательно.
 
-## Resources
+Что спрятано анонимными томами и почему:
 
-Check out a few resources that may come in handy when working with NestJS:
+| Путь | Зачем |
+| --- | --- |
+| `node_modules` (оба приложения) | внутри нужны те, что поставил `npm ci` в образе, а не хостовые |
+| `apps/frontend/.next` | в кэше турбопака абсолютные пути, а внутри проект живёт по `/repo` |
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+Из-за этого после правки зависимостей одного `--build` мало — тома переживают
+пересборку. Нужен `docker compose --profile dev up -d --build -V`
+(`-V` пересоздаёт анонимные тома).
 
-## Support
+Точку монтирования внутри бинд-маунта докер создаёт от root, если её нет на
+хосте. Каталога `apps/backend/node_modules` в репозитории нет, поэтому на чистом
+клоне он появится пустым и под root — не мешает, но чтобы не мешался
+`npm install` с хоста, проще создать его заранее:
+`mkdir -p apps/backend/node_modules`.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+`DATABASE_URL` и `BACKEND_URL` заданы в compose: в корневом `.env` лежат адреса
+для запуска с хоста (`localhost:5433`, `localhost:3000`), а внутри сети compose
+нужны имена сервисов. Переменная окружения контейнера в любом случае побеждает
+`.env`-файл — и у `@nestjs/config`, и у Next.
 
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
-
-## Локальный запуск
-
-1. Скопировать env-файл и при необходимости поправить креды:
+## Режим 3: прод-сборка в докере
 
 ```bash
-cp .env.example .env
+npm run docker:up            # postgres + backend + frontend, со сборкой образов
+npm run db:migrate:docker    # prisma migrate deploy внутри сети compose
+npm run docker:logs
+npm run docker:down
 ```
 
-2. Поднять Postgres в Docker:
+Прод-сборка живёт в профиле `app`, watch-режим — в профиле `dev`, поэтому
+`npm run db:up` (без профиля) поднимает только Postgres — это и есть режим 1.
+Профиль `tools` — разовые задачи вроде миграций.
 
-```bash
-npm run db:up          # docker compose up -d
-```
+| Сервис | Образ | Порт хоста |
+| --- | --- | --- |
+| `postgres` | `postgres:17-alpine` | `${POSTGRES_PORT:-5433}` → 5432 |
+| `backend` | сборка [apps/backend/Dockerfile](apps/backend/Dockerfile) | `${BACKEND_PORT:-3000}` |
+| `frontend` | сборка [apps/frontend/Dockerfile](apps/frontend/Dockerfile) | `${FRONTEND_PORT:-3001}` |
+| `backend-dev` | dev-стадия [apps/backend/Dockerfile](apps/backend/Dockerfile) | `${BACKEND_PORT:-3000}` |
+| `frontend-dev` | dev-стадия [apps/frontend/Dockerfile](apps/frontend/Dockerfile) | `${FRONTEND_PORT:-3001}` |
+| `migrate` | build-стадия бэкенда | — |
 
-Контейнер `saas_control_db` (postgres:17-alpine) слушает `localhost:5433`
-(порт 5432 на хосте занят локальным Postgres, поэтому пробрасывается 5433).
-Данные лежат в volume `pgdata`.
+Порт 5432 на хосте занят локальным Postgres, поэтому контейнер проброшен на
+5433. Имя проекта compose закреплено (`name: saas_control`) — иначе при переносе
+папки потерялся бы volume с данными.
 
-3. Применить миграции и сгенерировать Prisma Client:
-
-```bash
-npx prisma migrate dev
-npx prisma generate    # клиент генерируется в src/generated/prisma (в .gitignore)
-```
-
-4. Запустить приложение:
-
-```bash
-npm run start:dev
-```
-
-Проверка подключения к БД: `curl http://localhost:3000/health/db`
-
-## Полезные команды
+## Команды из корня
 
 | Команда | Что делает |
 | --- | --- |
-| `npm run db:up` / `npm run db:down` | поднять / остановить Postgres |
-| `npm run db:logs` | логи контейнера БД |
-| `npm run prisma:migrate` | создать и применить миграцию |
-| `npm run prisma:studio` | Prisma Studio |
-| `npm test` / `npm run test:e2e` | unit / e2e тесты |
+| `npm run dev` | бэкенд и фронтенд параллельно |
+| `npm run build` / `npm test` / `npm run lint` | по обоим приложениям |
+| `npm run backend:dev` / `npm run frontend:dev` | по одному приложению |
+| `npm run backend -- <script>` | скрипт бэкенда, напр. `npm run backend -- prisma:studio` |
+| `npm run frontend -- <script>` | скрипт фронтенда, напр. `npm run frontend -- typecheck` |
+| `npm run db:up` / `db:down` / `db:logs` | только Postgres |
+| `npm run docker:dev:up` / `docker:dev:down` / `docker:dev:logs` | весь стек в контейнерах, watch-режим |
+| `npm run docker:dev:migrate` | `prisma migrate deploy` в работающем `backend-dev` |
+| `npm run docker:up` / `docker:down` / `docker:logs` / `docker:build` | весь стек в контейнерах, прод-сборка |
+| `npm run db:migrate:docker` | `prisma migrate deploy` в контейнере |
+
+Подробности: [apps/backend/README.md](apps/backend/README.md) ·
+[apps/frontend/README.md](apps/frontend/README.md)
+
+## Добавление нового приложения
+
+Кладётся в `apps/<name>` со своим `package.json` (имя вида `@saas-control/<name>`)
+и автоматически подхватывается workspace'ом.

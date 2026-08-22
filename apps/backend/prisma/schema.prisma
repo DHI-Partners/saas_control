@@ -1,0 +1,92 @@
+// Prisma schema
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Клиент = аккаунт личного кабинета. Регистрация по почте, поэтому email
+/// уникален и служит логином.
+model Client {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  passwordHash    String
+  name            String?
+  role            Role      @default(CLIENT)
+  /// null — почта ещё не подтверждена по ссылке из письма
+  emailVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  sites              Site[]
+  verificationTokens EmailVerificationToken[]
+}
+
+enum Role {
+  CLIENT
+  ADMIN
+}
+
+/// Frappe-сайт. Принадлежит ровно одному клиенту (обязательный clientId),
+/// у клиента таких сайтов может быть сколько угодно.
+model Site {
+  id             String     @id @default(uuid())
+  /// имя сайта в bench, оно же хост: crm.example.com
+  name           String     @unique
+  /// дополнительный домен, если сайт открывается ещё и по нему
+  domain         String?    @unique
+  status         SiteStatus @default(PROVISIONING)
+  plan           SitePlan   @default(TRIAL)
+  /// версия Frappe/ERPNext, напр. "v15"
+  frappeVersion  String?
+  /// установленные приложения: erpnext, hrms, ...
+  apps           String[]   @default([])
+  notes          String?
+  /// последняя ошибка bench-провижининга, если сайт не развернулся
+  provisionError String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+}
+
+enum SiteStatus {
+  PROVISIONING
+  ACTIVE
+  /// bench new-site упал — имя можно освободить и создать заново
+  FAILED
+  SUSPENDED
+  ARCHIVED
+}
+
+enum SitePlan {
+  TRIAL
+  BASIC
+  PRO
+  ENTERPRISE
+}
+
+/// Одноразовая ссылка подтверждения почты. В базе лежит хэш токена —
+/// сам токен уходит только в письмо.
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+}
